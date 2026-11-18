@@ -1,0 +1,89 @@
+# Local replica of the cloud setup: 1 Trino coordinator + 3 workers,
+# MinIO standing in for S3, and an Iceberg REST catalog standing in for Glue.
+#   docker compose -f docker/docker-compose.yml up -d
+x-trino-env: &trino-env
+  MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+  MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+
+services:
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      retries: 20
+
+  minio-init:
+    image: minio/mc:RELEASE.2024-10-08T09-37-26Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} &&
+      mc mb --ignore-existing local/warehouse"
+    environment: *trino-env
+
+  iceberg-rest:
+    image: tabulario/iceberg-rest:1.6.0
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      AWS_REGION: us-east-1
+      CATALOG_WAREHOUSE: s3://warehouse/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://minio:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+    ports:
+      - "8181:8181"
+
+  trino-coordinator:
+    image: trinodb/trino:462
+    depends_on:
+      - iceberg-rest
+    environment: *trino-env
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./trino/coordinator:/etc/trino:ro
+      - ./trino/catalog:/etc/trino/catalog:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/v1/info"]
+      interval: 10s
+      retries: 30
+
+  trino-worker:
+    image: trinodb/trino:462
+    depends_on:
+      - trino-coordinator
+    environment: *trino-env
+    deploy:
+      replicas: 3
+    volumes:
+      - ./trino/worker:/etc/trino:ro
+      - ./trino/catalog:/etc/trino/catalog:ro
+
+  # One-shot container that loads data and runs the benchmark against the cluster.
+  bench:
+    build:
+      context: ..
+      dockerfile: docker/bench.Dockerfile
+    profiles: ["bench"]
+    depends_on:
+      trino-coordinator:
+        condition: service_healthy
+    environment:
+      TRINO_HOST: trino-coordinator
+      TRINO_PORT: "8080"
+    volumes:
+      - ../results:/app/results

@@ -1,0 +1,5 @@
+project_name              = "trino-query-engine"
+region                    = "us-east-1"
+coordinator_instance_type = "m6i.xlarge"
+worker_instance_type      = "r6i.xlarge"
+worker_count              = 3

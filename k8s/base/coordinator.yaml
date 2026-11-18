@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trino-coordinator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trino
+      component: coordinator
+  template:
+    metadata:
+      labels:
+        app: trino
+        component: coordinator
+    spec:
+      serviceAccountName: trino
+      nodeSelector:
+        trino-role: coordinator
+      containers:
+        - name: trino
+          image: trinodb/trino
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: AWS_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: trino-env
+                  key: AWS_REGION
+          resources:
+            requests:
+              cpu: "3"
+              memory: 12Gi
+            limits:
+              memory: 12Gi
+          readinessProbe:
+            httpGet:
+              path: /v1/info
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /v1/info
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 6
+          volumeMounts:
+            - name: config
+              mountPath: /etc/trino
+            - name: catalog
+              mountPath: /etc/trino/catalog
+            - name: data
+              mountPath: /data/trino
+      volumes:
+        - name: config
+          configMap:
+            name: trino-coordinator-config
+        - name: catalog
+          configMap:
+            name: trino-catalog
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: trino-coordinator
+spec:
+  selector:
+    app: trino
+    component: coordinator
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

@@ -1,0 +1,42 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: trino
+
+labels:
+  - pairs:
+      app.kubernetes.io/name: trino
+      app.kubernetes.io/part-of: trino-kubernetes-query-engine
+    includeSelectors: false
+
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - coordinator.yaml
+  - worker.yaml
+  - pdb.yaml
+
+configMapGenerator:
+  - name: trino-env
+    literals:
+      - AWS_REGION=us-east-1
+  - name: trino-coordinator-config
+    files:
+      - config/coordinator/config.properties
+      - config/coordinator/node.properties
+      - config/coordinator/jvm.config
+      - config/coordinator/log.properties
+  - name: trino-worker-config
+    files:
+      - config/worker/config.properties
+      - config/worker/node.properties
+      - config/worker/jvm.config
+      - config/worker/log.properties
+  - name: trino-catalog
+    files:
+      - config/catalog/iceberg.properties
+      - config/catalog/tpch.properties
+
+images:
+  - name: trinodb/trino
+    newTag: "462"

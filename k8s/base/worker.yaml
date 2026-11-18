@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trino-worker
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: trino
+      component: worker
+  template:
+    metadata:
+      labels:
+        app: trino
+        component: worker
+    spec:
+      serviceAccountName: trino
+      nodeSelector:
+        trino-role: worker
+      # One worker per node, so the 3 workers spread across the 3 worker nodes.
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: trino
+                  component: worker
+              topologyKey: kubernetes.io/hostname
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: trino
+          image: trinodb/trino
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: AWS_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: trino-env
+                  key: AWS_REGION
+          resources:
+            requests:
+              cpu: "3"
+              memory: 24Gi
+            limits:
+              memory: 24Gi
+          readinessProbe:
+            httpGet:
+              path: /v1/info
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          lifecycle:
+            # Ask Trino to drain running tasks before Kubernetes stops the pod.
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - >-
+                    curl -s -X PUT -H 'Content-Type: application/json'
+                    -H 'X-Trino-User: admin' -d '"SHUTTING_DOWN"'
+                    http://localhost:8080/v1/info/state && sleep 60
+          volumeMounts:
+            - name: config
+              mountPath: /etc/trino
+            - name: catalog
+              mountPath: /etc/trino/catalog
+            - name: data
+              mountPath: /data/trino
+      volumes:
+        - name: config
+          configMap:
+            name: trino-worker-config
+        - name: catalog
+          configMap:
+            name: trino-catalog
+        - name: data
+          emptyDir: {}
